@@ -1,0 +1,694 @@
+---
+title: "Plate chromosome QC from count matrices"
+format: html
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## Setup
+
+```{r}
+# Load libraries
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(ggplot2)
+  library(readr)
+  library(Matrix)
+})
+```
+
+## Inputs
+
+```{r}
+# TODO: Set the folder where your count matrices live
+counts_dir <- "C:/Users/Martijn/OneDrive - Radboud Universiteit/Documenten/Projects/Rings_Plates_Gala"
+
+# TODO: List all counts.tsv files and their plate IDs
+# Example: c("2104_counts.tsv", "2105_counts.tsv")
+count_files <- c(
+  "2104_Pfal_counts.tsv",
+  "2105_Pfal_counts.tsv",
+  "2107_Pfal_counts.tsv",
+  "2108_Pfal_counts.tsv",
+  "2109_Pfal_counts.tsv",
+  "2110_Pfal_counts.tsv",
+  "2112_Pfal_counts.tsv"
+)
+
+# TODO: Plate labels in the same order as count_files
+plate_ids <- c(
+  "2104",
+  "2105",
+  "2107",
+  "2108",
+  "2109",
+  "2110",
+  "2112")
+
+# Optional: set where you want to save the Seurat objects
+seurat_save_dir <- "C:/Users/Martijn/OneDrive - Radboud Universiteit/Documenten/Projects/Rings_Plates_Gala/seurat_objects2"
+
+# Control vs condition labels (optional, used for ordering or annotation)
+plate_group <- c(
+  "control",
+  "control",
+  "condition",
+  "condition",
+  "condition",
+  "condition",
+  "control")
+```
+
+## Create Seurat objects (no filtering)
+
+```{r}
+stopifnot(length(count_files) == length(plate_ids))
+
+seurat_list <- vector("list", length(count_files))
+
+for (i in seq_along(count_files)) {
+  file_path <- file.path(counts_dir, count_files[i])
+
+  # Expecting a gene-by-cell matrix with gene IDs in the first column
+  counts <- read_tsv(file_path, col_types = cols())
+  counts_mat <- as.matrix(counts[ , -1])
+  rownames(counts_mat) <- counts[[1]]
+
+  # Create Seurat object without filtering
+  seu <- CreateSeuratObject(
+    counts = counts_mat,
+    project = plate_ids[i],
+    min.cells = 0,
+    min.features = 0
+  )
+
+  # Add plate metadata
+  seu$plate_id <- plate_ids[i]
+  seu$plate_group <- plate_group[i]
+
+  seurat_list[[i]] <- seu
+
+  # Optional save per-plate object
+  if (seurat_save_dir != "PATH/TO/SAVE/SEURAT") {
+    saveRDS(seu, file.path(seurat_save_dir, paste0("plate_", plate_ids[i], ".rds")))
+  }
+}
+
+# Merge for plotting
+seu_all <- merge(seurat_list[[1]], y = seurat_list[-1], add.cell.ids = plate_ids)
+```
+
+## Quality overview (nCount and nFeature per plate)
+
+```{r}
+#Open plotting window and set order of plotting
+grDevices::windows()
+seu_all$plate_id <- factor(
+  seu_all$plate_id,
+  levels = c("2104","2105","2112","2107","2108","2109","2110")
+)
+VlnPlot(
+  seu_all,
+  features = c("nCount_RNA", "nFeature_RNA"),
+  group.by = "plate_id",
+  pt.size = 0.1,
+  ncol = 2
+)
+table(seu_all$plate_id)
+```
+
+## Filtering if you want
+
+```{r}
+seu_all_250 <- subset(seu_all, subset = nFeature_RNA > 250)
+VlnPlot(
+  seu_all_250,
+  features = c("nCount_RNA", "nFeature_RNA"),
+  group.by = "plate_id",
+  pt.size = 0.1,
+  ncol = 2
+)
+table(seu_all_250$plate_id)
+``` 
+
+```{r}
+grDevices::windows()
+Seurat_workflow <- function(seu_all) {
+seu_all <- NormalizeData(seu_all, normalization.method = "LogNormalize", scale.factor = 10000)
+seu_all <- FindVariableFeatures(seu_all, selection.method = "vst", nfeatures = 700)
+all.genes <- rownames(seu_all)
+seu_all <- ScaleData(seu_all, features = all.genes)
+seu_all <- RunPCA(seu_all)
+ElbowPlot(seu_all)
+seu_all <- FindNeighbors(seu_all, dims = 1:7)
+seu_all <- FindClusters(seu_all, resolution = 0.4)
+seu_all <- RunUMAP(seu_all, dims = 1:7, n.components = 2)
+DimPlot(seu_all, reduction = "umap", group.by = "seurat_clusters", label = T)
+return(seu_all)
+}
+
+seu_all_250_seurat <- Seurat_workflow(seu_all_250)
+saveRDS(seu_all_250_seurat, file.path(seurat_save_dir, paste0("Seu_all.rds")))
+DimPlot(seu_all_250_seurat)
+DimPlot(seu_all_250_seurat, group.by = "plate_group")
+DimPlot(seu_all_250_seurat, group.by = "plate_id")
+FeaturePlot(seu_all_250_seurat, features = c("nFeature_RNA", "nCount_RNA"))
+
+# Identfiy the ring population and name accordingly
+FeaturePlot(seu_all_250_seurat, features = c("PF3D7-0202500", "PF3D7-0532100", "PF3D7-1001500", "PF3D7-0935900", "PF3D7-0936000", "PF3D7-1370300", "PF3D7-0501300", "PF3D7-1102700", "PF3D7-1102800", "PF3D7-1240100", "PF3D7-1401400"))
+DotPlot(seu_all_250_seurat, features = c("PF3D7-0202500", "PF3D7-0532100", "PF3D7-1001500", "PF3D7-0935900", "PF3D7-0936000", "PF3D7-1370300", "PF3D7-0501300", "PF3D7-1102700", "PF3D7-1102800", "PF3D7-1240100", "PF3D7-1401400")) + RotatedAxis()
+Idents(seu_all_250_seurat) <- "seurat_clusters"
+seu_all_250_seurat_annot146 <- RenameIdents(seu_all_250_seurat, `0` = "Other", `1` = "Ring", `2` = "Other", `3` = "Other", `4` = "Ring", `5` = "Other", `6` = "Ring")
+DimPlot(seu_all_250_seurat_annot146, label = T)
+
+```
+
+# Subset only the rings, look at QC. 
+
+```{r}
+Ring146 <- subset(seu_all_250_seurat_annot146, idents = "Ring")
+Ring146 <- subset(Ring146, subset = nCount_RNA < 2000)
+VlnPlot(
+  Ring146,
+  features = c("nCount_RNA", "nFeature_RNA"),
+  group.by = "plate_id",
+  pt.size = 0.1,
+  ncol = 2
+)
+table(Ring146$plate_id)
+```
+
+# Identify differentially expressed genes between control rings and KS rings.
+
+```{r}
+Idents(Ring146) <- "plate_group"
+Ring146 <- JoinLayers(Ring146)
+Ring146_marker <- FindMarkers(Ring146, ident.1 = "control", ident.2 = "condition", min.pct = 0.2, logfc.threshold = 1, only.pos = FALSE)
+
+Idents(Ring14) <- "plate_group"
+Ring14 <- JoinLayers(Ring14)
+Ring14_marker <- FindMarkers(Ring14, ident.1 = "control", ident.2 = "condition", min.pct = 0.2, logfc.threshold = 1, only.pos = FALSE)
+
+aliases_Pf <- read.csv2(file = "C:/Users/Martijn/OneDrive - Radboud Universiteit/Documenten/Projects/ZonMW project/GenetoID_Pf2.csv", header = T, sep = ";") 
+
+annotate_pf_ids <- function(gene_ids, aliases_tbl) {
+  x <- tibble(gene_id = gene_ids) %>%
+    mutate(
+      gene_base = str_remove(gene_id, "\\.\\d+$"),
+      has_transcript_suffix = str_detect(gene_id, "\\.\\d+$")
+    )
+
+  ann_gene <- aliases_tbl %>%
+    select(GeneID_Pf, Product.Description_Pf, Symbol_Pf) %>%
+    distinct() %>%
+    rename(
+      gene_base = GeneID_Pf,
+      product_gene = Product.Description_Pf,
+      symbol_gene = Symbol_Pf
+    )
+
+  ann_tx <- aliases_tbl %>%
+    select(TranscriptID_Pf, Product.Description_Pf, Symbol_Pf) %>%
+    distinct() %>%
+    rename(
+      gene_id = TranscriptID_Pf,
+      product_tx = Product.Description_Pf,
+      symbol_tx = Symbol_Pf
+    )
+
+  x %>%
+    left_join(ann_tx, by = "gene_id") %>%
+    left_join(ann_gene, by = "gene_base") %>%
+    mutate(
+      product_description = ifelse(has_transcript_suffix, coalesce(product_tx, product_gene), coalesce(product_gene, product_tx)),
+      symbol = ifelse(has_transcript_suffix, coalesce(symbol_tx, symbol_gene), coalesce(symbol_gene, symbol_tx))
+    ) %>%
+    select(gene_id, product_description, symbol)
+}
+
+Ring146_marker <- Ring146_marker %>%
+  tibble::rownames_to_column("gene_id") %>%
+  left_join(annotate_pf_ids(.$gene_id, aliases_Pf), by = "gene_id") %>%
+  relocate(gene_id, product_description, symbol)
+write.csv(Ring146_marker, file = "C:/Users/Martijn/OneDrive - Radboud Universiteit/Documenten/Projects/Rings_Plates_Gala/Final/Ring146_CTRLvsKS_markers.csv", row.names = FALSE)
+
+Ring14_marker <- Ring14_marker %>%
+  tibble::rownames_to_column("gene_id") %>%
+  left_join(annotate_pf_ids(.$gene_id, aliases_Pf), by = "gene_id") %>%
+  relocate(gene_id, product_description, symbol)
+write.csv(Ring14_marker, file = "C:/Users/Martijn/OneDrive - Radboud Universiteit/Documenten/Projects/Rings_Plates_Gala/Final/Ring14_CTRLvsKS_markers.csv", row.names = FALSE)
+
+```
+
+# Remove ribosomal genes
+
+```{r}
+aliases_file <- "C:/Users/Martijn/OneDrive - Radboud Universiteit/Documenten/Projects/ZonMW project/GenetoID_Pf2.csv"
+if (!exists("aliases_Pf") && !exists("aliases")) {
+  if (!file.exists(aliases_file)) {
+    stop("Aliases file not found at: ", aliases_file)
+  }
+  aliases_Pf <- read.csv2(file = aliases_file, header = TRUE, sep = ";")
+}
+aliases_tbl <- if (exists("aliases")) {
+  aliases
+} else if (exists("aliases_Pf")) {
+  aliases_Pf
+} else {
+  stop("No aliases table found. Please load `aliases` or `aliases_Pf` first.")
+}
+
+required_alias_cols <- c("Gene.Type_Pf", "GeneID_Pf", "TranscriptID_Pf")
+if (!all(required_alias_cols %in% colnames(aliases_tbl))) {
+  stop(
+    "Aliases table must contain columns: ",
+    paste(required_alias_cols, collapse = ", ")
+  )
+}
+
+alias_types <- aliases_tbl %>%
+  transmute(
+    gene_base = as.character(GeneID_Pf),
+    transcript_id = as.character(TranscriptID_Pf),
+    gene_type_lc = str_to_lower(coalesce(Gene.Type_Pf, ""))
+  ) %>%
+  distinct()
+
+feature_map <- tibble(
+  feature_id = rownames(Ring146),
+  gene_base = str_remove(feature_id, "\\.\\d+$")
+)
+
+feature_types <- feature_map %>%
+  left_join(
+    alias_types %>% select(gene_base, gene_type_lc) %>% distinct(),
+    by = "gene_base"
+  ) %>%
+  left_join(
+    alias_types %>% select(feature_id = transcript_id, gene_type_tx = gene_type_lc) %>% distinct(),
+    by = "feature_id"
+  ) %>%
+  mutate(gene_type_lc = coalesce(gene_type_tx, gene_type_lc))
+
+keep_features <- feature_types %>%
+  filter(str_detect(gene_type_lc, "protein")) %>%
+  pull(feature_id) %>%
+  unique() %>%
+  intersect(rownames(Ring146))
+
+if (length(keep_features) == 0) {
+  stop("No protein-coding features found in Ring146.")
+}
+
+Ring146_ncremove <- subset(Ring146, features = keep_features)
+message(
+  "Ring146: features ", nrow(Ring146), " -> ",
+  nrow(Ring146_ncremove), " (protein-coding only)"
+)
+saveRDS(Ring146_ncremove, file.path(seurat_save_dir, "Ring146_ncremove.rds"))
+```
+
+## Select genes expressed in at least 30% of all parasites, export tables, and build chromosome QC heatmaps
+
+```{r}
+export_dir <- file.path(counts_dir, "Final")
+if (!dir.exists(export_dir)) dir.create(export_dir, recursive = TRUE)
+
+get_chr_pf <- function(gene_id) {
+  m <- str_match(gene_id, "^PF3D7-(\\d{2})")
+  if (!is.na(m[, 2])) return(paste0("chr", m[, 2]))
+  NA_character_
+}
+
+chr_sort_index <- function(chr_vec) {
+  num <- suppressWarnings(as.integer(str_remove(chr_vec, "^chr")))
+  ifelse(is.na(num), Inf, num)
+}
+
+get_assay_data_safe <- function(seu_obj, assay = "RNA", layer = "counts") {
+  out <- tryCatch(GetAssayData(seu_obj, assay = assay, layer = layer), error = function(e) NULL)
+  if (is.null(out)) {
+    slot_name <- ifelse(layer == "data", "data", "counts")
+    out <- tryCatch(GetAssayData(seu_obj, assay = assay, slot = slot_name), error = function(e) NULL)
+  }
+  if (is.null(out)) stop("Could not retrieve ", layer, " matrix from Seurat object.")
+  out
+}
+
+build_combined_heatmap <- function(df, status_col, white_label, black_label) {
+  if (nrow(df) == 0) {
+    warning("No rows available to build heatmap.")
+    return(NULL)
+  }
+
+  cell_levels <- df %>%
+    distinct(cell, plate_group, plate_id) %>%
+    mutate(
+      group_order = case_when(
+        plate_group == "Control" ~ 1L,
+        plate_group == "Condition (KS)" ~ 2L,
+        TRUE ~ 3L
+      )
+    ) %>%
+    arrange(group_order, plate_id, cell) %>%
+    pull(cell)
+
+  chrom_levels <- unique(df$chrom[order(chr_sort_index(df$chrom), df$chrom)])
+
+  plot_df <- df %>%
+    mutate(
+      fill_status = factor(.data[[status_col]], levels = c(white_label, black_label)),
+      x_idx = match(cell, cell_levels),
+      y_idx = match(chrom, chrom_levels)
+    )
+
+  annotation_df <- df %>%
+    distinct(cell, plate_group) %>%
+    mutate(
+      x_idx = match(cell, cell_levels),
+      group_fill = case_when(
+        plate_group == "Control" ~ "Control",
+        plate_group == "Condition (KS)" ~ "Condition (KS)",
+        TRUE ~ "Other"
+      )
+    )
+
+  heatmap_plot <- ggplot() +
+    geom_tile(
+      data = plot_df,
+      aes(x = x_idx, y = y_idx, fill = fill_status),
+      color = "white",
+      linewidth = 0.15,
+      width = 1,
+      height = 1
+    ) +
+    geom_segment(
+      data = annotation_df,
+      aes(
+        x = x_idx - 0.5,
+        xend = x_idx + 0.5,
+        y = 0.5,
+        yend = 0.5,
+        color = group_fill
+      ),
+      linewidth = 1.2,
+      lineend = "butt"
+    ) +
+    scale_fill_manual(
+      values = setNames(c("white", "black"), c(white_label, black_label)),
+      breaks = c(white_label, black_label),
+      labels = c(white_label, black_label),
+      drop = FALSE,
+      name = "Status"
+    ) +
+    scale_color_manual(
+      values = c("Control" = "grey70", "Condition (KS)" = "black", "Other" = "grey40"),
+      guide = "none"
+    ) +
+    scale_x_continuous(
+      limits = c(0.5, length(cell_levels) + 0.5),
+      expand = c(0, 0)
+    ) +
+    scale_y_reverse(
+      limits = c(length(chrom_levels) + 0.5, 0),
+      breaks = seq_along(chrom_levels),
+      labels = chrom_levels,
+      expand = c(0, 0)
+    ) +
+    labs(x = "Parasites (cells)", y = "Chromosome") +
+    theme_minimal(base_size = 11) +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.text.y = element_text(size = 8),
+      panel.grid = element_blank()
+    )
+
+  list(
+    heatmap_plot = heatmap_plot,
+    n_cells = length(cell_levels),
+    n_chrom = length(chrom_levels)
+  )
+}
+
+print_stitched_heatmap <- function(hm_obj, figure_title, open_window = TRUE, min_height = 5, max_height = 24, per_chrom = 0.35) {
+  if (is.null(hm_obj)) {
+    warning("Cannot render stitched heatmap; heatmap object is NULL.")
+    return(invisible(NULL))
+  }
+
+  target_height <- max(min_height, min(max_height, 2.5 + hm_obj$n_chrom * per_chrom))
+  target_width <- max(12, min(28, 4 + hm_obj$n_cells * 0.03))
+
+  draw_single <- function() {
+    print(
+      hm_obj$heatmap_plot +
+        ggtitle(figure_title) +
+        theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+    )
+  }
+
+  if (isTRUE(open_window) && interactive()) {
+    tryCatch(
+      {
+        if (.Platform$OS.type == "windows") {
+          grDevices::windows(width = target_width, height = target_height)
+        } else {
+          grDevices::dev.new(width = target_width, height = target_height)
+        }
+        draw_single()
+      },
+      error = function(e) {
+        message("Could not open interactive graphics window: ", conditionMessage(e))
+      }
+    )
+  }
+
+  if (requireNamespace("knitr", quietly = TRUE)) {
+    old_height <- knitr::opts_current$get("fig.height")
+    old_width <- knitr::opts_current$get("fig.width")
+    knitr::opts_current$set(fig.height = target_height, fig.width = target_width)
+    draw_single()
+    knitr::opts_current$set(fig.height = old_height, fig.width = old_width)
+  } else {
+    draw_single()
+  }
+
+  invisible(list(n_cells = hm_obj$n_cells, n_chrom = hm_obj$n_chrom))
+}
+
+run_chr_qc_for_object <- function(seu_obj, obj_label) {
+  seu_for_chr <- tryCatch(JoinLayers(seu_obj), error = function(e) seu_obj)
+
+  counts_mat <- get_assay_data_safe(seu_for_chr, assay = "RNA", layer = "counts")
+
+  data_mat <- tryCatch(
+    get_assay_data_safe(seu_for_chr, assay = "RNA", layer = "data"),
+    error = function(e) NULL
+  )
+  if (is.null(data_mat)) {
+    seu_for_chr <- NormalizeData(
+      seu_for_chr,
+      assay = "RNA",
+      normalization.method = "LogNormalize",
+      scale.factor = 10000,
+      verbose = FALSE
+    )
+    data_mat <- get_assay_data_safe(seu_for_chr, assay = "RNA", layer = "data")
+  }
+
+  meta_tmp <- seu_for_chr@meta.data %>%
+    mutate(cell = rownames(seu_for_chr@meta.data)) %>%
+    select(cell, plate_id, plate_group)
+
+  if (!all(c("cell", "plate_id", "plate_group") %in% colnames(meta_tmp))) {
+    stop("Metadata must contain: cell, plate_id, plate_group")
+  }
+
+  meta_tmp <- meta_tmp %>%
+    mutate(
+      plate_group_raw = as.character(plate_group),
+      plate_group_norm = str_to_lower(str_squish(plate_group_raw)),
+      plate_group = case_when(
+        str_detect(plate_group_norm, "control") ~ "Control",
+        str_detect(plate_group_norm, "condition|ks") ~ "Condition (KS)",
+        TRUE ~ plate_group_raw
+      )
+    ) %>%
+    select(cell, plate_id, plate_group)
+
+  message("=== ", obj_label, " ===")
+  print(meta_tmp %>% count(plate_group, name = "n_cells"))
+
+  gene_detect_frac <- Matrix::rowSums(counts_mat > 0) / ncol(counts_mat)
+  genes_keep <- names(gene_detect_frac)[gene_detect_frac >= 0.30]
+  if (length(genes_keep) == 0) {
+    stop("No genes are expressed in at least 30% of all parasites for ", obj_label)
+  }
+
+  counts_30 <- counts_mat[genes_keep, , drop = FALSE]
+  data_30 <- data_mat[genes_keep, , drop = FALSE]
+
+  gene_chr_map <- tibble(
+    gene = rownames(counts_30),
+    chrom = vapply(rownames(counts_30), get_chr_pf, character(1))
+  ) %>%
+    filter(!is.na(chrom)) %>%
+    mutate(chr_idx = chr_sort_index(chrom)) %>%
+    arrange(chr_idx, chrom, gene) %>%
+    select(-chr_idx)
+
+  if (nrow(gene_chr_map) == 0) {
+    stop("No PF3D7 chromosome-mappable genes remain after 30% filtering for ", obj_label)
+  }
+
+  genes_per_chr <- gene_chr_map %>%
+    count(chrom, name = "n_genes_after_30pct") %>%
+    mutate(chr_idx = chr_sort_index(chrom)) %>%
+    arrange(chr_idx, chrom) %>%
+    select(-chr_idx)
+  print(genes_per_chr)
+
+  chr_gene_sets <- split(gene_chr_map$gene, gene_chr_map$chrom)
+  detected_by_chr <- lapply(chr_gene_sets, function(genes) {
+    Matrix::colSums(counts_30[genes, , drop = FALSE] > 0)
+  })
+
+  chr_detect_mat <- do.call(rbind, detected_by_chr)
+  chr_detect_mat <- chr_detect_mat[order(chr_sort_index(rownames(chr_detect_mat)), rownames(chr_detect_mat)), , drop = FALSE]
+
+  detected_by_chr_df <- as.data.frame(t(chr_detect_mat), check.names = FALSE)
+  detected_by_chr_df$cell <- rownames(detected_by_chr_df)
+
+  heatmap_base <- detected_by_chr_df %>%
+    pivot_longer(-cell, names_to = "chrom", values_to = "detected_genes") %>%
+    left_join(genes_per_chr, by = "chrom") %>%
+    left_join(meta_tmp, by = "cell") %>%
+    filter(!is.na(plate_group), !is.na(plate_id)) %>%
+    mutate(
+      status_zero = ifelse(detected_genes == 0, "Zero counts", "Detected"),
+      status_one = ifelse(detected_genes <= 1, "<=1 gene detected", ">1 gene detected"),
+      status_two = ifelse(detected_genes <= 2, "<=2 genes detected", ">2 genes detected"),
+      status_one_ten = ifelse(detected_genes < (n_genes_after_30pct / 10), "<1/10 genes detected", ">=1/10 genes detected")
+    )
+
+  chr_keep_gt10 <- genes_per_chr %>%
+    filter(n_genes_after_30pct > 10) %>%
+    pull(chrom)
+
+  hm_df <- heatmap_base %>% filter(chrom %in% chr_keep_gt10)
+  if (nrow(hm_df) == 0) {
+    warning("No chromosomes with >10 genes after 30% filter for ", obj_label)
+  }
+
+  cell_order <- meta_tmp %>%
+    arrange(plate_group, plate_id, cell) %>%
+    pull(cell)
+  cell_conditions <- meta_tmp$plate_group[match(cell_order, meta_tmp$cell)]
+
+  chr_counts_export <- as.data.frame(chr_detect_mat[, cell_order, drop = FALSE], check.names = FALSE) %>%
+    tibble::rownames_to_column("Chromosome") %>%
+    mutate(across(-Chromosome, as.character))
+
+  condition_row_chr <- tibble(Chromosome = "Condition")
+  for (i in seq_along(cell_order)) {
+    condition_row_chr[[cell_order[i]]] <- cell_conditions[i]
+  }
+  chr_counts_export <- bind_rows(condition_row_chr, chr_counts_export)
+  write.csv(
+    chr_counts_export,
+    file = file.path(export_dir, paste0(obj_label, "_chromosome_detected_genes_per_cell_30pct.csv")),
+    row.names = FALSE
+  )
+
+  gene_order <- gene_chr_map %>% distinct(chrom, gene)
+  gene_ids_ordered <- gene_order$gene
+  lognorm_mat <- data_30[gene_ids_ordered, cell_order, drop = FALSE]
+  lognorm_export <- as.data.frame(as.matrix(lognorm_mat), check.names = FALSE) %>%
+    tibble::rownames_to_column("GeneID") %>%
+    left_join(gene_order, by = c("GeneID" = "gene")) %>%
+    relocate(chrom, .before = GeneID) %>%
+    mutate(across(-c(chrom, GeneID), as.character))
+
+  condition_row_gene <- tibble(chrom = "Condition", GeneID = "Condition")
+  for (i in seq_along(cell_order)) {
+    condition_row_gene[[cell_order[i]]] <- cell_conditions[i]
+  }
+  lognorm_export <- bind_rows(condition_row_gene, lognorm_export)
+  write.csv(
+    lognorm_export,
+    file = file.path(export_dir, paste0(obj_label, "_lognorm_counts_genes_30pct_ordered_by_chromosome.csv")),
+    row.names = FALSE
+  )
+
+  hm_zero <- build_combined_heatmap(
+    df = hm_df,
+    status_col = "status_zero",
+    white_label = "Detected",
+    black_label = "Zero counts"
+  )
+  hm_one <- build_combined_heatmap(
+    df = hm_df,
+    status_col = "status_one",
+    white_label = ">1 gene detected",
+    black_label = "<=1 gene detected"
+  )
+  hm_two <- build_combined_heatmap(
+    df = hm_df,
+    status_col = "status_two",
+    white_label = ">2 genes detected",
+    black_label = "<=2 genes detected"
+  )
+  hm_one_ten <- build_combined_heatmap(
+    df = hm_df,
+    status_col = "status_one_ten",
+    white_label = ">=1/10 genes detected",
+    black_label = "<1/10 genes detected"
+  )
+
+  print_stitched_heatmap(
+    hm_obj = hm_zero,
+    figure_title = paste0(obj_label, " | chromosomes >10 genes | black = zero genes detected")
+  )
+  print_stitched_heatmap(
+    hm_obj = hm_one,
+    figure_title = paste0(obj_label, " | chromosomes >10 genes | black = <=1 gene detected")
+  )
+  print_stitched_heatmap(
+    hm_obj = hm_two,
+    figure_title = paste0(obj_label, " | chromosomes >10 genes | black = <=2 genes detected")
+  )
+  print_stitched_heatmap(
+    hm_obj = hm_one_ten,
+    figure_title = paste0(obj_label, " | chromosomes >10 genes | black = <1/10 genes detected")
+  )
+
+  list(
+    genes_keep = genes_keep,
+    genes_per_chromosome = genes_per_chr,
+    chr_keep_gt10 = chr_keep_gt10,
+    heatmap_data = hm_df,
+    heatmaps = list(
+      zero = hm_zero,
+      one = hm_one,
+      two = hm_two,
+      one_ten = hm_one_ten
+    ),
+    export_files = list(
+      chromosome_detected_genes_per_cell = file.path(export_dir, paste0(obj_label, "_chromosome_detected_genes_per_cell_30pct.csv")),
+      lognorm_counts_genes = file.path(export_dir, paste0(obj_label, "_lognorm_counts_genes_30pct_ordered_by_chromosome.csv"))
+    )
+  )
+}
+
+ring146_chr_qc <- run_chr_qc_for_object(Ring146_ncremove, "Ring146_ncremove")
+ring146_chr_qc$genes_per_chromosome
+ring146_chr_qc$export_files
+
+saveRDS(ring146_chr_qc, file.path(seurat_save_dir, "Ring146_ncremove_chr_qc_results.rds"))
+```
