@@ -25,11 +25,10 @@ suppressPackageStartupMessages({
 ## Inputs
 
 ```{r}
-# TODO: Set the folder where your count matrices live
+#ADJUSTABLE: Set the folder where your count matrices live
 counts_dir <- "C:/Users/Martijn/OneDrive - Radboud Universiteit/Documenten/Projects/Rings_Plates_Gala"
 
-# TODO: List all counts.tsv files and their plate IDs
-# Example: c("2104_counts.tsv", "2105_counts.tsv")
+#ADJUSTABLE: List all counts.tsv files and their plate IDs
 count_files <- c(
   "2104_Pfal_counts.tsv",
   "2105_Pfal_counts.tsv",
@@ -40,7 +39,7 @@ count_files <- c(
   "2112_Pfal_counts.tsv"
 )
 
-# TODO: Plate labels in the same order as count_files
+#ADJUSTABLE: Plate labels in the same order as count_files
 plate_ids <- c(
   "2104",
   "2105",
@@ -50,7 +49,7 @@ plate_ids <- c(
   "2110",
   "2112")
 
-# Optional: set where you want to save the Seurat objects
+#ADJUSTABLE: set where you want to save the Seurat objects
 seurat_save_dir <- "C:/Users/Martijn/OneDrive - Radboud Universiteit/Documenten/Projects/Rings_Plates_Gala/seurat_objects2"
 
 # Control vs condition labels (optional, used for ordering or annotation)
@@ -64,13 +63,10 @@ plate_group <- c(
   "control")
 ```
 
-## Create Seurat objects (no filtering)
+## Create Seurat objects (no filtering yet)
 
 ```{r}
-stopifnot(length(count_files) == length(plate_ids))
-
 seurat_list <- vector("list", length(count_files))
-
 for (i in seq_along(count_files)) {
   file_path <- file.path(counts_dir, count_files[i])
 
@@ -104,7 +100,6 @@ seu_all <- merge(seurat_list[[1]], y = seurat_list[-1], add.cell.ids = plate_ids
 ```
 
 ## Quality overview (nCount and nFeature per plate)
-
 ```{r}
 #Open plotting window and set order of plotting
 grDevices::windows()
@@ -123,7 +118,6 @@ table(seu_all$plate_id)
 ```
 
 ## Filtering if you want
-
 ```{r}
 seu_all_250 <- subset(seu_all, subset = nFeature_RNA > 250)
 VlnPlot(
@@ -169,7 +163,6 @@ DimPlot(seu_all_250_seurat_annot146, label = T)
 ```
 
 # Subset only the rings, look at QC. 
-
 ```{r}
 Ring146 <- subset(seu_all_250_seurat_annot146, idents = "Ring")
 Ring146 <- subset(Ring146, subset = nCount_RNA < 2000)
@@ -183,70 +176,7 @@ VlnPlot(
 table(Ring146$plate_id)
 ```
 
-# Identify differentially expressed genes between control rings and KS rings.
-
-```{r}
-Idents(Ring146) <- "plate_group"
-Ring146 <- JoinLayers(Ring146)
-Ring146_marker <- FindMarkers(Ring146, ident.1 = "control", ident.2 = "condition", min.pct = 0.2, logfc.threshold = 1, only.pos = FALSE)
-
-Idents(Ring14) <- "plate_group"
-Ring14 <- JoinLayers(Ring14)
-Ring14_marker <- FindMarkers(Ring14, ident.1 = "control", ident.2 = "condition", min.pct = 0.2, logfc.threshold = 1, only.pos = FALSE)
-
-aliases_Pf <- read.csv2(file = "C:/Users/Martijn/OneDrive - Radboud Universiteit/Documenten/Projects/ZonMW project/GenetoID_Pf2.csv", header = T, sep = ";") 
-
-annotate_pf_ids <- function(gene_ids, aliases_tbl) {
-  x <- tibble(gene_id = gene_ids) %>%
-    mutate(
-      gene_base = str_remove(gene_id, "\\.\\d+$"),
-      has_transcript_suffix = str_detect(gene_id, "\\.\\d+$")
-    )
-
-  ann_gene <- aliases_tbl %>%
-    select(GeneID_Pf, Product.Description_Pf, Symbol_Pf) %>%
-    distinct() %>%
-    rename(
-      gene_base = GeneID_Pf,
-      product_gene = Product.Description_Pf,
-      symbol_gene = Symbol_Pf
-    )
-
-  ann_tx <- aliases_tbl %>%
-    select(TranscriptID_Pf, Product.Description_Pf, Symbol_Pf) %>%
-    distinct() %>%
-    rename(
-      gene_id = TranscriptID_Pf,
-      product_tx = Product.Description_Pf,
-      symbol_tx = Symbol_Pf
-    )
-
-  x %>%
-    left_join(ann_tx, by = "gene_id") %>%
-    left_join(ann_gene, by = "gene_base") %>%
-    mutate(
-      product_description = ifelse(has_transcript_suffix, coalesce(product_tx, product_gene), coalesce(product_gene, product_tx)),
-      symbol = ifelse(has_transcript_suffix, coalesce(symbol_tx, symbol_gene), coalesce(symbol_gene, symbol_tx))
-    ) %>%
-    select(gene_id, product_description, symbol)
-}
-
-Ring146_marker <- Ring146_marker %>%
-  tibble::rownames_to_column("gene_id") %>%
-  left_join(annotate_pf_ids(.$gene_id, aliases_Pf), by = "gene_id") %>%
-  relocate(gene_id, product_description, symbol)
-write.csv(Ring146_marker, file = "C:/Users/Martijn/OneDrive - Radboud Universiteit/Documenten/Projects/Rings_Plates_Gala/Final/Ring146_CTRLvsKS_markers.csv", row.names = FALSE)
-
-Ring14_marker <- Ring14_marker %>%
-  tibble::rownames_to_column("gene_id") %>%
-  left_join(annotate_pf_ids(.$gene_id, aliases_Pf), by = "gene_id") %>%
-  relocate(gene_id, product_description, symbol)
-write.csv(Ring14_marker, file = "C:/Users/Martijn/OneDrive - Radboud Universiteit/Documenten/Projects/Rings_Plates_Gala/Final/Ring14_CTRLvsKS_markers.csv", row.names = FALSE)
-
-```
-
 # Remove ribosomal genes
-
 ```{r}
 aliases_file <- "C:/Users/Martijn/OneDrive - Radboud Universiteit/Documenten/Projects/ZonMW project/GenetoID_Pf2.csv"
 if (!exists("aliases_Pf") && !exists("aliases")) {
@@ -314,7 +244,6 @@ saveRDS(Ring146_ncremove, file.path(seurat_save_dir, "Ring146_ncremove.rds"))
 ```
 
 ## Select genes expressed in at least 30% of all parasites, export tables, and build chromosome QC heatmaps
-
 ```{r}
 export_dir <- file.path(counts_dir, "Final")
 if (!dir.exists(export_dir)) dir.create(export_dir, recursive = TRUE)
